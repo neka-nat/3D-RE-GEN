@@ -20,6 +20,13 @@ def find_python_executable(venv_path, use_conda_env=None):
         venv_path: Path to virtual environment (ignored if use_conda_env is set)
         use_conda_env: Name or path to conda environment (e.g., "py-310-fresh" or full path)
     """
+    use_current_python = (
+        os.environ.get("THREED_REGEN_USE_CURRENT_PYTHON", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if use_current_python or use_conda_env == "__CURRENT__":
+        return sys.executable
+
     # If conda environment is specified, use it
     if use_conda_env:
         # Check if it's a full path or just an environment name
@@ -44,6 +51,8 @@ def find_python_executable(venv_path, use_conda_env=None):
             raise FileNotFoundError(f"Conda Python executable not found at {conda_bin}")
     
     # Original venv logic
+    if not venv_path:
+        raise FileNotFoundError("No virtual environment path provided.")
     bin_dir = os.path.join(venv_path, "Scripts" if sys.platform == "win32" else "bin")
     candidates = (
         ["python.exe"]
@@ -90,31 +99,43 @@ def run_script(
         env["CUDA_VISIBLE_DEVICES"] = device.split(":")[1]
 
     if use_blender:
+        blender_executable = os.environ.get("THREED_REGEN_BLENDER_EXECUTABLE")
         try:
-            # Get Python version from the venv
-            version_result = subprocess.run(
-                [python_executable, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            venv_python_version = version_result.stdout.strip()
-            
-            if venv_python_version == "3.12":
-                blender_executable = "blender"
-            else:
-                # Use absolute path to blender executable
-                blender_executable = os.path.join(os.path.dirname(script_dir), "blender", "blender")
-                
+            if not blender_executable:
+                # Get Python version from the venv/current interpreter.
+                version_result = subprocess.run(
+                    [
+                        python_executable,
+                        "-c",
+                        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                venv_python_version = version_result.stdout.strip()
+
+                if venv_python_version == "3.12":
+                    blender_executable = "blender"
+                else:
+                    bundled_blender = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "blender",
+                        "blender",
+                    )
+                    blender_executable = (
+                        bundled_blender if os.path.isfile(bundled_blender) else "blender"
+                    )
         except subprocess.CalledProcessError:
             # Fallback to system blender if we can't determine version
             print("Warning: Could not determine venv Python version, using system blender")
             blender_executable = "blender"
-        
+
         command = [blender_executable, "-b", "-P", script_path]
+        if args:
+            command.extend(["--", *args])
 
     else:
-        python_executable = find_python_executable(venv_path)
         command = [python_executable, script_path]
         if args:
             command.extend(args)
@@ -131,6 +152,7 @@ def run_all(
     config=None,
     use_conda_env=None,
 ):
+    success = True
     if parts_to_run is None:
         if exclude_parts is None:
             # Default: run all scripts
@@ -203,14 +225,19 @@ def run_all(
 
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to run {task['name']}: {e}")
+            success = False
             # Stop
             break
 
         except FileNotFoundError as e:
             print(f"⚠️  Missing Python executable for {task['name']}: {e}")
+            success = False
+            break
+
+    return success
 
 
-def get_scripts(*pipeline_types: list) -> list:
+def get_scripts(*pipeline_types: list, config_path=None) -> list:
     """
     Get scripts for one or more pipeline types.
 
@@ -224,6 +251,7 @@ def get_scripts(*pipeline_types: list) -> list:
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     main_venv = os.path.join(script_dir, "venv_py310")
+    config_path = config_path or os.path.join(script_dir, "src", "config.yaml")
     pipelines = {
         "segmentation": [
             {
@@ -233,6 +261,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "segmentation", "segmentation.py"
                 ),
                 "cwd": os.path.join(script_dir, "segmentor"),
+                "args": ["--config", config_path],
             },
         ],
         "inpainting": [
@@ -243,6 +272,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "segmentation", "inpaint_nanoBanana.py"
                 ),
                 "cwd": os.path.join(script_dir, "segmentor"),
+                "args": ["--config", config_path],
             },
         ],
         "camera_dust3r": [
@@ -253,6 +283,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "camera_and_pointcloud", "minimal_demo_dust3r.py"
                 ),
                 "cwd": os.path.join(script_dir, "dust3r"),
+                "args": ["--config", config_path],
             },
         ],
         "Hunyuan_2d_to_3d": [
@@ -261,7 +292,7 @@ def get_scripts(*pipeline_types: list) -> list:
                 "venv": main_venv,
                 "script": os.path.join(script_dir, "src", "2d_to_3d_models", "run.py"),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
         "Hunyuan_2d_to_3d_v21": [
@@ -270,7 +301,7 @@ def get_scripts(*pipeline_types: list) -> list:
                 "venv": main_venv,
                 "script": os.path.join(script_dir, "src", "2d_to_3d_models", "run_hunyuan21.py"),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
         "point_cloud_extraction": [
@@ -281,7 +312,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "scene_reconstruction", "source", "extract_pc_object.py"
                 ),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
                 #"use_conda": True,  # Use conda env for this task
             },
         ],
@@ -293,7 +324,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "scene_reconstruction", "run.py"
                 ),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
         "scene_optim": [
@@ -304,7 +335,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "scene_optimization", "scene_optim.py"
                 ),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
         "render": [
@@ -316,7 +347,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "blender_rendering", "run.py"
                 ),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
                 "use_blender": True,
             },
         ],
@@ -326,7 +357,7 @@ def get_scripts(*pipeline_types: list) -> list:
                 "venv": main_venv,
                 "script": os.path.join(script_dir, "src", "evaluation", "run_eval.py"),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
         "camera_vggt": [
@@ -337,6 +368,7 @@ def get_scripts(*pipeline_types: list) -> list:
                     script_dir, "src", "camera_and_pointcloud", "minimal_demo_vggt.py"
                 ), # "minimal_demo_vggt_unproject.py"
                 "cwd": os.path.join(script_dir, "vggt"),
+                "args": ["--config", config_path],
             },
         ],
         "MIDI_2d_to_3d": [
@@ -345,7 +377,7 @@ def get_scripts(*pipeline_types: list) -> list:
                 "venv": main_venv,
                 "script": os.path.join(script_dir, "src", "evaluation", "run_midi.py"),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
         "DPA_2d_to_3d": [
@@ -354,7 +386,7 @@ def get_scripts(*pipeline_types: list) -> list:
                 "venv": main_venv,
                 "script": os.path.join(script_dir, "src", "evaluation", "run_dpa.py"),
                 "cwd": os.path.join(script_dir, "src"),
-                "args": ["--config", os.path.join(script_dir, "src", "config.yaml")],
+                "args": ["--config", config_path],
             },
         ],
     }
@@ -411,7 +443,7 @@ if __name__ == "__main__":
     device = config.get("device_global", "cuda:0")
     
     # Check if we should use a conda environment instead of venvs
-    use_conda_env = config.get("conda_env", "/mnt/lustre/work/lensch/lhr526/.conda/py-310-fresh")
+    use_conda_env = config.get("conda_env")
     
     if use_conda_env:
         print(f"ℹ️  Using conda environment: {use_conda_env}")
@@ -429,7 +461,8 @@ if __name__ == "__main__":
             "scene_optim",
             "render",
             "evaluation",
-        ]
+        ],
+        config_path=args.config,
     )
 
     # swap out vggt for position 2 of scripts_to_run
@@ -445,7 +478,8 @@ if __name__ == "__main__":
                 "scene_optim",
                 "render",
                 "evaluation",
-            ]
+            ],
+            config_path=args.config,
         )
 
 
@@ -462,7 +496,8 @@ if __name__ == "__main__":
                 "scene_optim",
                 "render",
                 "evaluation",
-            ]
+            ],
+            config_path=args.config,
         )
 
     if config.get("Use_MIDI", False):
@@ -471,21 +506,23 @@ if __name__ == "__main__":
                 "MIDI_2d_to_3d",
                 "scene_optim",
                 "evaluation",
-            ]
+            ],
+            config_path=args.config,
         )
 
     if config.get("Use_DPA", False):
         scripts_to_run = get_scripts(
             [
                 "DPA_2d_to_3d",
-            ]
+            ],
+            config_path=args.config,
         )
 
     logging.info(f"Scripts to run: {[task['name'] for task in scripts_to_run]}")
     # Start time
     start_time = time.time()
 
-    run_all(
+    success = run_all(
         scripts_to_run,
         parts_to_run,
         exclude_parts,
@@ -498,3 +535,5 @@ if __name__ == "__main__":
     # End time
     end_time = time.time()
     print(f"Total time taken: {(end_time - start_time)/60} minutes")
+    if not success:
+        sys.exit(1)

@@ -901,7 +901,7 @@ def pose_matching(config, model_name, iteration, device_id):
     if not os.path.exists(glb_path):
         raise FileNotFoundError(f"GLB file not found at: {glb_path}")
 
-    logging.info("Loading GLB model from:", glb_path)
+    logging.info("Loading GLB model from: %s", glb_path)
 
     load_object = io.load_mesh(glb_path, load_textures=True, device=device)
 
@@ -947,7 +947,7 @@ def pose_matching(config, model_name, iteration, device_id):
     save_img_to_temp(mask, config, "mask")
 
     image_size, target_height = mask.shape[1], mask.shape[0]
-    logging.info("Mask size:", image_size, target_height)
+    logging.info("Mask size: %s x %s", image_size, target_height)
 
     ### Initialize Renderers: ###############################################################################
     # Initialize a perspective camera.
@@ -1050,7 +1050,9 @@ def pose_matching(config, model_name, iteration, device_id):
 
     # LOAD TARGET POINTCLOUD ####################################################
 
-    point_cloud_folder = config.get("point_cloud_folder", "../output/pointclouds")
+    point_cloud_folder = config.get("point_cloud_folder") or config.get(
+        "output_ply", "../output/pointclouds"
+    )
     pc_path = os.path.join(point_cloud_folder, model_name + ".ply")
 
     # load ply file

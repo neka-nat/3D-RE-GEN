@@ -93,7 +93,7 @@ genai_top_p: 0.95
 use_banana: true # If true, use Banana.dev for upscaling (requires API key and credits)
 use_AQ: true # If true, instead of using outlined pictures, use the object extraction application from AQ
 
-model_id: "gemini-2.5-flash-image-preview" #"gemini-3-pro-image-preview"
+model_id: "gemini-2.5-flash-image" #"gemini-3.1-flash-image-preview"
 
 keep_existing_banans: false # If true, skip images that have already been processed by Banana.dev
 keep_existing_empty_rooms: true # If true, skip empty room images that have already been processed by Banana.dev

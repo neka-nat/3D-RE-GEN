@@ -1,8 +1,8 @@
-from google import genai
-from google.genai import types
-from google.genai.types import GenerateContentConfig
-from PIL import Image, ImageOps
+import base64
+import mimetypes
 from io import BytesIO
+from PIL import Image, ImageOps
+import requests
 import os
 import argparse
 import multiprocessing as mp
@@ -11,6 +11,81 @@ import numpy as np
 import cv2
 from utils.global_utils import load_config, clear_output_directory, extract_AQ_object
 from rembg import remove, new_session
+
+
+def _get_genai_api_key() -> str:
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY or GEMINI_API_KEY must be set.")
+    return api_key
+
+
+def _guess_mime_type(path: str) -> str:
+    mime_type, _ = mimetypes.guess_type(path)
+    return mime_type or "image/png"
+
+
+def _generate_image_with_rest(
+    input_image_path: str,
+    prompt_text: str,
+    temperature: float,
+    model: str,
+    config: dict | None,
+) -> tuple[str | None, bytes | None]:
+    api_key = _get_genai_api_key()
+    generation_config = {
+        "temperature": temperature,
+        "topP": (config or {}).get("genai_top_p", 0.9),
+        "seed": (config or {}).get("seed", 12345),
+        "responseModalities": ["TEXT", "IMAGE"],
+    }
+
+    with open(input_image_path, "rb") as image_file:
+        image_b64 = base64.b64encode(image_file.read()).decode("utf-8")
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt_text},
+                    {
+                        "inline_data": {
+                            "mime_type": _guess_mime_type(input_image_path),
+                            "data": image_b64,
+                        }
+                    },
+                ]
+            }
+        ],
+        "generationConfig": generation_config,
+    }
+
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=(30, 300),
+    )
+    response.raise_for_status()
+    response_json = response.json()
+
+    text_parts = []
+    for candidate in response_json.get("candidates", []):
+        content = candidate.get("content") or {}
+        for part in content.get("parts", []):
+            if part.get("text"):
+                text_parts.append(part["text"])
+            inline_data = part.get("inlineData") or part.get("inline_data")
+            if inline_data and inline_data.get("data"):
+                return ("\n".join(text_parts) if text_parts else None, base64.b64decode(inline_data["data"]))
+
+    prompt_feedback = response_json.get("promptFeedback")
+    if prompt_feedback:
+        text_parts.append(f"Prompt feedback: {prompt_feedback}")
+    raise RuntimeError("\n".join(text_parts) or "No image data returned by Gemini.")
 
 
 def make_bg_removal_less_aggressive(
@@ -359,48 +434,28 @@ def process_image_worker(
     filename = os.path.basename(input_image_path)
 
     try:
-        # --- 1. Initialize client within the worker ---
-        client = genai.Client()
-
-        # --- 2. Prepare dynamic prompt from filename ---
+        # --- 1. Prepare dynamic prompt from filename ---
         object_name = filename.split("__")[0].replace("_", " ")
         prompt_text = base_prompt.format(object=object_name)
 
-        # --- 3. Load image and call API ---
+        # --- 2. Call API ---
         print(f"Processing: {filename} with prompt for '{object_name}'...")
-        image = Image.open(input_image_path)
+        response_text, image_bytes = _generate_image_with_rest(
+            input_image_path=input_image_path,
+            prompt_text=prompt_text,
+            temperature=temperature,
+            model=model,
+            config=config,
+        )
+        if response_text:
+            print(response_text)
+        if image_bytes is None:
+            return f"Failed: No image data returned for {filename}"
 
-        response = client.models.generate_content(
-            model= model,
-            contents=[prompt_text, image],
-            config=GenerateContentConfig(
-                temperature=temperature, # 
-                # candidate_count=1,
-                # response_mime_type="application/json",
-                top_p=config.get("genai_top_p", 0.9),
-                # top_k=20,
-                seed=config.get("seed", 12345),
-                # image_config=types.ImageConfig(
-                #     aspect_ratio ="1:1"
-                # ),
-                #max_output_tokens=500,
-                # stop_sequences=["STOP!"],
-                # presence_penalty=0.0,
-                # frequency_penalty=0.0,
-            )
-        )  
-
-        # --- 4. Save the output image ---
-        for part in response.candidates[0].content.parts:
-            if part.text is not None:
-                print(part.text)
-            elif part.inline_data is not None:
-                generated_image_data = BytesIO(part.inline_data.data)
-                output_image = Image.open(generated_image_data)
-                output_image.save(output_image_path)
-                return f"Successfully processed and saved: {filename}"
-
-        return f"Failed: No image data returned for {filename}"
+        # --- 3. Save the output image ---
+        output_image = Image.open(BytesIO(image_bytes))
+        output_image.save(output_image_path)
+        return f"Successfully processed and saved: {filename}"
 
     except Exception as e:
         return f"Error processing {filename}: {e}"

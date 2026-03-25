@@ -1,0 +1,61 @@
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" \
+    FORCE_CUDA="1" \
+    CUDA_HOME="/usr/local/cuda"
+
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3.10-dev \
+    python3-pip \
+    git \
+    git-lfs \
+    wget \
+    curl \
+    ffmpeg \
+    build-essential \
+    ninja-build \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    libegl1 \
+    libopengl0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
+    python -m pip install --upgrade pip setuptools wheel
+
+WORKDIR /root/3D-RE-GEN
+COPY . /root/3D-RE-GEN
+
+RUN python -m pip install --index-url https://download.pytorch.org/whl/cu121 \
+    torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+
+RUN python -m pip install "numpy<2.0" && \
+    python -m pip install fvcore iopath && \
+    python -m pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git"
+
+RUN grep -v '^gradio$' segmentor/requirements.txt > /tmp/segmentor.requirements.modal.txt && \
+    python -m pip install -r requirements.txt -r /tmp/segmentor.requirements.modal.txt && \
+    python -m pip uninstall -y pydantic || true && \
+    python -m pip install --upgrade --force-reinstall "pydantic>=2,<3" google-genai "numpy<2.0"
+
+RUN python -c "import pydantic; print('pydantic', pydantic.__version__); assert int(pydantic.__version__.split('.')[0]) >= 2"
+
+RUN python -m pip install -e ./Hunyuan3D-2
+
+RUN python -m pip install pybind11 && \
+    cd /root/3D-RE-GEN/Hunyuan3D-2/hy3dgen/texgen/custom_rasterizer && \
+    python -m pip install --no-build-isolation . && \
+    cd /root/3D-RE-GEN/Hunyuan3D-2/hy3dgen/texgen/differentiable_renderer && \
+    python -m pip install --no-build-isolation .
+
+RUN mkdir -p segmentor && \
+    wget -q -O segmentor/sam_vit_h_4b8939.pth \
+    https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth

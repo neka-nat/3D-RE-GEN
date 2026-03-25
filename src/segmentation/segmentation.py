@@ -50,8 +50,6 @@ from point_generators import (
 )
 
 from utils.data_types import DetectionResult, BoundingBox
-from utils.manual_editor import edit_segmentations_interactive
-
 from rembg import remove
 
 
@@ -246,8 +244,12 @@ def plot_detections(
     plt.imshow(annotated_image)
     plt.axis("off")
     if save_name:
+        save_dir = os.path.dirname(save_name)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
         plt.savefig(save_name, bbox_inches="tight")
     plt.show()
+    plt.close()
 
 
 def random_named_css_colors(num_colors: int) -> List[str]:
@@ -1130,6 +1132,8 @@ def main():
 
     # --- NEW: INSERT THE INTERACTIVE EDITING STEP HERE ---
     if config.get("interactive_edit", True):
+        from utils.manual_editor import edit_segmentations_interactive
+
         print("\n#################################################################")
         print("### Starting Interactive Editing Session...                 ###")
         print("### Please open the Gradio link in your browser.          ###")
@@ -1143,7 +1147,7 @@ def main():
         print(f"\nInteractive session finished. Proceeding with {len(detections)} final detections.")
     # --- END OF NEW CODE ---
 
-    plot_detections(image_array, detections, "../output/box_segmented_image.png")
+    plot_detections(image_array, detections, os.path.join(output_dir, "box_segmented_image.png"))
     # plot_detections_plotly(image_array, detections)
     cropped_dir, fullsize_dir = save_masked_findings(
         image_array=image_array,

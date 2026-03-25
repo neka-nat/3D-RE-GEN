@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import argparse
 import torch
 from PIL import Image
 import trimesh
@@ -131,9 +132,20 @@ def process_image(image_path, output_dir, config):
 
 def main():
     """Main function following the pattern of the original run.py"""
-    
+
+    parser = argparse.ArgumentParser(
+        description="Run Hunyuan3D-2.1 model generation."
+    )
+    parser.add_argument(
+        "--config",
+        default="../src/config.yaml",
+        type=str,
+        help="Path to the configuration file.",
+    )
+    args = parser.parse_args()
+
     # Load configuration (everything controlled by config)
-    config = load_config("../src/config.yaml")
+    config = load_config(args.config)
     
     # --- File and Folder Setup (same as original) ---
     input_folder = config["input_folder_hy"]

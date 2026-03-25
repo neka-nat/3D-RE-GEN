@@ -612,7 +612,12 @@ def demo_fn(config):
 
     # Get image paths and (optionally) include background as second frame
     image_main = config["image_url"]
-    image_bg = "../output/findings/banana/inpaint_nanoBanana/empty_room.png"
+    image_bg = os.path.join(
+        config.get(
+            "output_inp_banana", "../output/findings/banana/inpaint_nanoBanana"
+        ),
+        "empty_room.png",
+    )
     if os.path.exists(image_bg):
         print(f"Found background image at: {image_bg}")
 

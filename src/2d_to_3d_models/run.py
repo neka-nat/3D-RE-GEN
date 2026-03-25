@@ -21,6 +21,30 @@ import trimesh
 import numpy as np
 from huggingface_hub import snapshot_download
 
+
+def maybe_disable_transformers_torch_load_safety_check(config):
+    if not config.get("disable_transformers_torch_load_safety_check", False):
+        return
+
+    def _allow_torch_load():
+        return None
+
+    try:
+        from transformers.utils import import_utils as transformers_import_utils
+
+        transformers_import_utils.check_torch_load_is_safe = _allow_torch_load
+    except Exception as exc:
+        print(f"[WARN] Failed to patch transformers import_utils torch.load safety check: {exc}")
+
+    try:
+        import transformers.modeling_utils as transformers_modeling_utils
+
+        transformers_modeling_utils.check_torch_load_is_safe = _allow_torch_load
+        print("Disabled transformers torch.load safety check for trusted model weights.")
+    except Exception as exc:
+        print(f"[WARN] Failed to patch transformers modeling_utils torch.load safety check: {exc}")
+
+
 def clean_and_validate_trimesh(mesh, min_faces=10, target_face_count=None):
     """
     Cleans, validates, and optionally remeshes a trimesh object.
@@ -114,6 +138,7 @@ def worker(image_path, output_folder, config, device_id, shapegen_config, texgen
         os.environ['CUDA_VISIBLE_DEVICES'] = str(device_id)
         device = 'cuda:0' # The worker will only see this one GPU
         print(f"Worker (PID: {os.getpid()}) processing '{os.path.basename(image_path)}' on GPU {device_id}")
+        maybe_disable_transformers_torch_load_safety_check(config)
 
         # Initialize models within the worker. This is necessary for 'spawn' multiprocessing.
         shapegen_path = snapshot_download(repo_id=shapegen_config["id"])
@@ -141,6 +166,7 @@ def main():
     parser.add_argument("--config", default="../src/config.yaml", type=str, help="Path to the configuration file.")
     args = parser.parse_args()
     config = load_config(args.config)
+    maybe_disable_transformers_torch_load_safety_check(config)
 
     # --- Define Model Configurations ---
     shapegen_models = {
@@ -216,4 +242,3 @@ def main():
 if __name__ == "__main__":
     mp.set_start_method('spawn', force=True)
     main()
-
